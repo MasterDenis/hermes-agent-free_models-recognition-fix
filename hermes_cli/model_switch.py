@@ -1077,7 +1077,7 @@ def list_authenticated_providers(
     )
     from hermes_cli.auth import PROVIDER_REGISTRY
     from hermes_cli.models import (
-        OPENROUTER_MODELS, _PROVIDER_MODELS,
+        OPENROUTER_MODELS, _PROVIDER_MODELS, _FREE_MODELS,
         _MODELS_DEV_PREFERRED, _merge_with_models_dev, provider_model_ids,
         get_curated_nous_model_ids,
     )
@@ -1735,6 +1735,98 @@ def list_authenticated_providers(
 
     # Sort: current provider first, then by model count descending
     results.sort(key=lambda r: (not r["is_current"], -r["total_models"]))
+
+    # ── Post-processing: annotate free models, sort free-first, prune empties ──
+
+    # 1. Drop built-in rows that have an overlapping custom: variant with models,
+    #    and drop completely empty rows (no models).
+    _builtin_slugs = {r["slug"] for r in results if not r["slug"].startswith("custom:")}
+    _pruned: list[dict] = []
+    for row in results:
+        slug = row.get("slug", "")
+        models = row.get("models", [])
+        # Drop custom: rows whose base slug duplicates a built-in that already has models
+        if slug.startswith("custom:") and slug.replace("custom:", "", 1) in _builtin_slugs:
+            _builtin = next((r for r in results if r["slug"] == slug.replace("custom:", "", 1)), None)
+            if _builtin and _builtin.get("models"):
+                continue  # built-in already covers this provider with models
+        # Drop rows with zero models (no curated list, no live discovery results)
+        if not models:
+            continue
+        _pruned.append(row)
+    results = _pruned
+
+    # 2. Annotate free models: populate free_models list, append " (free)" suffix,
+    #    sort free models first.
+    for row in results:
+        slug = row.get("slug", "")
+        models = row.get("models", [])
+
+        # Resolve _FREE_MODELS entry (exact match + custom: prefix stripping)
+        free_info = _FREE_MODELS.get(slug)
+        if free_info is None and slug.startswith("custom:"):
+            free_info = _FREE_MODELS.get(slug.replace("custom:", "", 1))
+
+        # Determine which models are free.
+        # Priority: 1) live pricing API  2) :free suffix  3) static _FREE_MODELS
+        free_set: set[str] = set()
+
+        # ── Static _FREE_MODELS lookup ──
+        _base = slug.replace("custom:", "", 1) if slug.startswith("custom:") else slug
+        if free_info is None:
+            free_info = _FREE_MODELS.get(_base) if slug.startswith("custom:") else free_info
+        if free_info == "*":
+            free_set.update(models)
+        elif isinstance(free_info, set):
+            free_set.update(free_info)
+
+        # ── :free suffix models (OpenRouter convention) ──
+        for m in models:
+            if m.endswith(":free"):
+                free_set.add(m)
+
+        # ── Live pricing auto-detection (best-effort, cached) ──
+        # Try fetching /v1/models pricing for any provider that exposes it.
+        # Uses the same cache as get_pricing_for_provider(), so repeated
+        # calls across providers are free after the first fetch.
+        _pricing: dict = {}
+        try:
+            from hermes_cli.models import get_pricing_for_provider, _is_model_free
+            _pricing = get_pricing_for_provider(_base)
+        except Exception:
+            pass
+
+        if _pricing:
+            for _mid in models:
+                if _is_model_free(_mid, _pricing):
+                    free_set.add(_mid)
+            # Pull in free models from pricing not in the curated list.
+            # Skip models whose provider prefix belongs to a different
+            # configured provider (e.g. openrouter/ models on Nous).
+            for _mid in _pricing:
+                if not _is_model_free(_mid, _pricing):
+                    continue
+                _prefix = _mid.split("/")[0] if "/" in _mid else ""
+                # openrouter/ prefixed models belong to OpenRouter, not Nous etc.
+                if _prefix == "openrouter" and _base != "openrouter":
+                    continue
+                free_set.add(_mid)
+                if _mid not in models:
+                    models.append(_mid)
+                    row["total_models"] = len(models)
+
+        # Build free_models list and sort free-first (display suffix left to UIs).
+        if free_set:
+            row["free_models"] = sorted(
+                [m for m in models if m in free_set],
+                key=lambda m: models.index(m)
+            )
+            # Reorder: free models first, then paid; preserve relative order
+            free_display = [m for m in models if m in free_set]
+            paid_display = [m for m in models if m not in free_set]
+            row["models"] = free_display + paid_display
+        else:
+            row["free_models"] = []
 
     return results
 

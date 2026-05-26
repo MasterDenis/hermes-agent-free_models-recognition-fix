@@ -147,6 +147,10 @@ def build_models_payload(
     if canonical_order:
         rows = _reorder_canonical(rows)
 
+    # Free-model annotation is now done inside list_authenticated_providers()
+    # so all consumers (TUI, CLI, WebUI) get consistent annotations without
+    # double-suffixing.
+
     return {
         "providers": rows,
         "model": ctx.current_model,
@@ -238,3 +242,30 @@ def _reorder_canonical(rows: list[dict]) -> list[dict]:
     )
     extras = [r for r in rows if r["slug"] not in order]
     return canon + extras
+
+
+def _annotate_free_models(rows: list[dict]) -> None:
+    """Annotate each provider row with a ``free_models`` list.
+
+    Mutates ``rows`` in-place. Uses ``_FREE_MODELS`` from ``hermes_cli.models``
+    — providers with the sentinel ``"*"`` get all their models listed as free;
+    providers with a ``set`` get only the listed IDs.
+    """
+    from hermes_cli.models import _FREE_MODELS
+
+    for row in rows:
+        slug = row.get("slug", "")
+        # Try exact match first, then strip custom: prefix for custom providers
+        free_info = _FREE_MODELS.get(slug)
+        if free_info is None and slug.startswith("custom:"):
+            free_info = _FREE_MODELS.get(slug.replace("custom:", "", 1))
+        if free_info is None:
+            row["free_models"] = []
+            continue
+        models = row.get("models", [])
+        if free_info == "*":
+            row["free_models"] = list(models)
+        elif isinstance(free_info, set):
+            row["free_models"] = [m for m in models if m in free_info]
+        else:
+            row["free_models"] = []

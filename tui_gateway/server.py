@@ -1108,6 +1108,9 @@ def _apply_model_switch(sid: str, session: dict, raw_input: str) -> dict:
     from hermes_cli.runtime_provider import resolve_runtime_provider
 
     model_input, explicit_provider, persist_global = parse_model_flags(raw_input)
+    # Strip " (free)" display suffix that TUIs may append from free_models data.
+    if isinstance(model_input, str) and model_input.endswith(" (free)"):
+        model_input = model_input[: -7]
     if not model_input:
         raise ValueError("model value required")
 

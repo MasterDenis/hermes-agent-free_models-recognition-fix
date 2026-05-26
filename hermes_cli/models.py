@@ -484,6 +484,24 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
 # source of truth.
 _PROVIDER_MODELS["ai-gateway"] = [mid for mid, _ in VERCEL_AI_GATEWAY_MODELS]
 
+# Provider -> set of free model IDs. The sentinel "*" means every model is free.
+# Used by list_authenticated_providers() to append " (free)" display suffixes
+# and populate a parallel free_models list so UIs can distinguish free from
+# paid models without an extra API call.
+# OpenRouter is handled separately via its live /v1/models pricing probe.
+_FREE_MODELS: dict[str, set[str] | str] = {
+    "gitlawb": "*",
+    "ollama": "*",
+    "ollama-cloud": "*",
+    "groq": {
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "whisper-large-v3",
+        "whisper-large-v3-turbo",
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Nous Portal free-model helper
 # ---------------------------------------------------------------------------
